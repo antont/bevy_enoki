@@ -477,10 +477,14 @@ fn update_particles_simd(
             }
         }
 
+        // Gravity accelerates the velocity (cocos2d: `dir += gravity * dt`).
         let gravity = load8(&particles.gravity_speed, index) * delta8;
-        px += vx * delta8 + load8(&particles.gravity_x, index) * gravity;
-        py += vy * delta8 + load8(&particles.gravity_y, index) * gravity;
-        pz += vz * delta8 + load8(&particles.gravity_z, index) * gravity;
+        vx += load8(&particles.gravity_x, index) * gravity;
+        vy += load8(&particles.gravity_y, index) * gravity;
+        vz += load8(&particles.gravity_z, index) * gravity;
+        px += vx * delta8;
+        py += vy * delta8;
+        pz += vz * delta8;
         let rotation = load8(&particles.rotation, index) + angular_velocity * delta8;
 
         store8(&mut particles.position_x, index, px);
@@ -571,13 +575,14 @@ fn update_particle_scalar(
         }
     }
 
+    // Gravity accelerates the velocity (cocos2d: `dir += gravity * dt`).
     let gravity = particles.gravity_speed[index] * delta;
-    particles.position_x[index] +=
-        particles.velocity_x[index] * delta + particles.gravity_x[index] * gravity;
-    particles.position_y[index] +=
-        particles.velocity_y[index] * delta + particles.gravity_y[index] * gravity;
-    particles.position_z[index] +=
-        particles.velocity_z[index] * delta + particles.gravity_z[index] * gravity;
+    particles.velocity_x[index] += particles.gravity_x[index] * gravity;
+    particles.velocity_y[index] += particles.gravity_y[index] * gravity;
+    particles.velocity_z[index] += particles.gravity_z[index] * gravity;
+    particles.position_x[index] += particles.velocity_x[index] * delta;
+    particles.position_y[index] += particles.velocity_y[index] * delta;
+    particles.position_z[index] += particles.velocity_z[index] * delta;
 
     particles.rotation[index] += particles.angular_velocity[index] * delta;
 }
@@ -664,6 +669,48 @@ mod tests {
             ] {
                 assert!((actual - expected).abs() < 1e-5, "{actual} != {expected}");
             }
+        }
+    }
+
+    /// cocos2d `CCParticleSystem.m [update:]`: `dir += gravity * dt; pos += dir * dt`.
+    fn cocos_gravity_steps(gravity: f32, dt: f32, steps: usize) -> (f32, f32) {
+        let (mut velocity, mut position) = (0.0_f32, 0.0_f32);
+        for _ in 0..steps {
+            velocity += gravity * dt;
+            position += velocity * dt;
+        }
+        (velocity, position)
+    }
+
+    #[test]
+    fn gravity_is_an_acceleration() {
+        let (gravity, dt, steps) = (-300.0_f32, 1.0 / 30.0, 15);
+        let (expected_v, expected_y) = cocos_gravity_steps(gravity, dt, steps);
+        let effect = Particle2dEffect::default();
+
+        // 9 particles: 8 go through the SIMD path, the last one through the scalar path.
+        let mut particles = ParticleStore::default();
+        for _ in 0..9 {
+            particles.push(
+                Transform::default(),
+                1000.0,
+                Vec3::ZERO,
+                0.0,
+                LinearRgba::WHITE,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -gravity,
+                Vec3::NEG_Y,
+            );
+        }
+        for _ in 0..steps {
+            update_particles(&mut particles, &effect, dt, Vec3::ZERO, Vec3::ZERO);
+        }
+        for index in [0, 8] {
+            assert!((particles.velocity_y[index] - expected_v).abs() < 1e-2, "{index}");
+            assert!((particles.position_y[index] - expected_y).abs() < 1e-2, "{index}");
         }
     }
 
