@@ -395,6 +395,12 @@ fn create_particle(store: &mut ParticleStore, effect: &Particle2dEffect, transfo
                 * radius
                 * rand::random::<f32>()
         }
+        EmissionShape::Rect(half) => EmissionShape::rect_offset(
+            half,
+            rand::random::<f32>(),
+            rand::random::<f32>(),
+        )
+        .extend(0.),
     };
 
     store.push(
@@ -680,6 +686,28 @@ mod tests {
             position += velocity * dt;
         }
         (velocity, position)
+    }
+
+    #[test]
+    fn rect_emission_covers_the_half_extents() {
+        let half = Vec2::new(10.0, 4.0);
+        assert_eq!(EmissionShape::rect_offset(half, 0.0, 0.0), Vec2::new(-10.0, -4.0));
+        assert_eq!(EmissionShape::rect_offset(half, 1.0, 1.0), Vec2::new(10.0, 4.0));
+        assert_eq!(EmissionShape::rect_offset(half, 0.5, 0.5), Vec2::ZERO);
+
+        // Through create_particle: every spawn lands inside the rectangle, and both axes are used.
+        let effect = Particle2dEffect {
+            emission_shape: EmissionShape::Rect(half),
+            ..Default::default()
+        };
+        let mut store = ParticleStore::default();
+        for _ in 0..200 {
+            create_particle(&mut store, &effect, &Transform::default());
+        }
+        assert!(store.position_x.iter().all(|x| x.abs() <= 10.0));
+        assert!(store.position_y.iter().all(|y| y.abs() <= 4.0));
+        assert!(store.position_x.iter().any(|x| x.abs() > 5.0));
+        assert!(store.position_y.iter().any(|y| y.abs() > 2.0));
     }
 
     #[test]
