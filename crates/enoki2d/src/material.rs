@@ -1,4 +1,4 @@
-use crate::RenderParticleTag;
+use crate::{blend::ParticleBlend, ParticleEffectInstance, RenderParticleTag};
 
 use super::{ParticleSpawner, ParticleStore};
 use bevy_app::{App, Plugin};
@@ -30,7 +30,7 @@ use bevy_render::{
     },
     render_resource::{
         binding_types::uniform_buffer, AsBindGroup, AsBindGroupError, BindGroup, BindGroupEntries,
-        BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendState, BufferUsages, BufferVec,
+        BindGroupLayoutDescriptor, BindGroupLayoutEntries, BufferUsages, BufferVec,
         ColorTargetState, ColorWrites, CompareFunction, DepthBiasState, DepthStencilState,
         FrontFace, IndexFormat, OwnedBindingResource, PipelineCache, PolygonMode, PrimitiveState,
         RenderPipelineDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline,
@@ -183,19 +183,24 @@ fn extract_particles<M: Particle2dMaterial>(
             &ParticleSpawner<M>,
             &ViewVisibility,
             &RenderEntity,
+            &ParticleEffectInstance,
         )>,
     >,
 ) {
     extraced_batches.particles.clear();
     particle_buffer.instance_buffer.clear();
     query.iter().for_each(|emitter| {
-        let (particle_store, global, material_handle, visbility, render_entity) = emitter;
+        let (particle_store, global, material_handle, visbility, render_entity, effect) = emitter;
         if !visbility.get() || particle_store.is_empty() {
             return;
         }
 
         cmd.entity(**render_entity)
-            .insert((ZOrder(FloatOrd(global.translation().z)), ParticleTag));
+            .insert((
+                ZOrder(FloatOrd(global.translation().z)),
+                ParticleTag,
+                ParticleBlendTag(effect.as_ref().map(|e| e.blend).unwrap_or_default()),
+            ));
         let start = particle_buffer.instance_buffer.len() as u32;
         for index in 0..particle_store.len() {
             particle_buffer
@@ -216,6 +221,10 @@ pub struct ParticleTag;
 #[derive(Component, Deref)]
 pub struct ZOrder(FloatOrd);
 
+/// The blend mode of a spawner's effect, extracted next to its `ZOrder`.
+#[derive(Component, Deref)]
+pub struct ParticleBlendTag(ParticleBlend);
+
 // ----------------------------------------------
 // #queue
 #[allow(clippy::too_many_arguments)]
@@ -225,7 +234,7 @@ fn queue_particles<M: Particle2dMaterial>(
     mut pipelines: ResMut<SpecializedRenderPipelines<Particle2dPipeline<M>>>,
     pipeline_cache: Res<PipelineCache>,
     extract_particles: Res<ExtracedParticleSpawner<M>>,
-    z_orders: Query<&ZOrder>,
+    z_orders: Query<(&ZOrder, &ParticleBlendTag)>,
     views: Query<(&ExtractedView, &RenderVisibleEntities, &Msaa)>,
     mut render_phases: ResMut<ViewSortedRenderPhases<Transparent2d>>,
 ) {
@@ -241,9 +250,6 @@ fn queue_particles<M: Particle2dMaterial>(
         let mesh_key = Mesh2dPipelineKey::from_msaa_samples(msaa.samples())
             | Mesh2dPipelineKey::from_target_format(view.target_format);
 
-        let key = Particle2dPipelineKey { mesh_key };
-        let pipeline = pipelines.specialize(&pipeline_cache, &custom_pipeline, key);
-
         let Some(visible_entities) = visible_entities.get::<RenderParticleTag>() else {
             continue;
         };
@@ -253,9 +259,12 @@ fn queue_particles<M: Particle2dMaterial>(
                 continue;
             }
 
-            let Ok(order) = z_orders.get(*entity) else {
+            let Ok((order, blend)) = z_orders.get(*entity) else {
                 return;
             };
+
+            let key = Particle2dPipelineKey::new(mesh_key, **blend);
+            let pipeline = pipelines.specialize(&pipeline_cache, &custom_pipeline, key);
 
             transparent_phase.add_transient(Transparent2d {
                 extracted_index: 0,
@@ -530,9 +539,16 @@ pub struct Particle2dPipeline<M: Particle2dMaterial> {
     _m: std::marker::PhantomData<M>,
 }
 
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone, Debug)]
 pub struct Particle2dPipelineKey {
     mesh_key: Mesh2dPipelineKey,
+    blend: ParticleBlend,
+}
+
+impl Particle2dPipelineKey {
+    pub(crate) fn new(mesh_key: Mesh2dPipelineKey, blend: ParticleBlend) -> Self {
+        Self { mesh_key, blend }
+    }
 }
 
 impl<M: Particle2dMaterial> FromWorld for Particle2dPipeline<M> {
@@ -611,7 +627,7 @@ impl<M: Particle2dMaterial> SpecializedRenderPipeline for Particle2dPipeline<M> 
                 constants: vec![],
                 targets: vec![Some(ColorTargetState {
                     format: key.mesh_key.target_format(),
-                    blend: Some(BlendState::ALPHA_BLENDING),
+                    blend: Some(key.blend.blend_state()),
                     write_mask: ColorWrites::ALL,
                 })],
             }),

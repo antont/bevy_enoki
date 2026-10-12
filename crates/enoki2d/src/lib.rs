@@ -26,8 +26,10 @@ use bevy_shader::Shader;
 use bevy_transform::components::Transform;
 use color::ColorParticle2dMaterial;
 use serde::{Deserialize, Serialize};
+use blend::ParticleBlend;
 use values::Rval;
 
+mod blend;
 mod color;
 mod curve;
 mod loader;
@@ -38,6 +40,7 @@ mod values;
 
 #[allow(unused)]
 pub mod prelude {
+    pub use super::blend::{BlendFactor, ParticleBlend};
     pub use super::color::ColorParticle2dMaterial;
     pub use super::curve::{LerpThat, MultiCurve /* , ParticleEaseFunction */};
     pub use super::loader::ParticleEffectLoader;
@@ -251,6 +254,9 @@ pub struct Particle2dEffect {
     pub color_curve: Option<curve::MultiCurve<LinearRgba>>,
     pub attractors: Option<Vec<Attractor>>,
     pub relative_positioning: Option<bool>,
+    /// How the particles are blended into the target. Defaults to alpha blending.
+    #[serde(default)]
+    pub blend: ParticleBlend,
 }
 
 impl Default for Particle2dEffect {
@@ -275,6 +281,7 @@ impl Default for Particle2dEffect {
             color_curve: None,
             attractors: None,
             relative_positioning: None,
+            blend: ParticleBlend::Alpha,
         }
     }
 }
