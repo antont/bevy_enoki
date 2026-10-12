@@ -27,5 +27,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let v_offset = (max_vframe - vframe - 1.0) * frame_height;
 
     let uv = in.uv * vec2<f32>(frame_width, frame_height) + vec2<f32>(u_offset, v_offset);
-    return out * textureSample(texture, texture_sampler, uv);
+    var sampled = textureSample(texture, texture_sampler, uv);
+    if (frame_data.z != 0u) {
+        sampled = vec4<f32>(sampled.rgb * sampled.a, sampled.a);
+    }
+    return out * sampled;
 }

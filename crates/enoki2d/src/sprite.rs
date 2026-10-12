@@ -26,6 +26,17 @@ impl Default for SpriteParticle2dMaterial {
 }
 
 impl SpriteParticle2dMaterial {
+    /// Multiply the texture's RGB by its alpha before the particle colour is applied (what a premultiplied
+    /// texture looks like to the blend equation). For blend modes whose source factor does not multiply by alpha.
+    pub fn with_premultiplied_texture(mut self) -> Self {
+        self.frame_data.z = 1;
+        self
+    }
+
+    pub fn is_premultiplied_texture(&self) -> bool {
+        self.frame_data.z != 0
+    }
+
     pub fn new(texture: Handle<Image>, max_hframes: u32, max_vframes: u32) -> Self {
         Self {
             texture: Some(texture),
@@ -44,5 +55,17 @@ impl SpriteParticle2dMaterial {
 impl Particle2dMaterial for SpriteParticle2dMaterial {
     fn fragment_shader() -> bevy_shader::ShaderRef {
         PARTICLE_SPRITE_FRAG.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn premultiplied_texture_is_a_flag_of_the_material() {
+        let plain = SpriteParticle2dMaterial::from_texture(Handle::default());
+        assert!(!plain.is_premultiplied_texture());
+        assert!(plain.with_premultiplied_texture().is_premultiplied_texture());
     }
 }
