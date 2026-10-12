@@ -49,8 +49,8 @@ pub mod prelude {
     pub use super::update::{OneShot, ParticleEffectInstance, ParticleSpawnerState, ParticleStore};
     pub use super::values::{Random, Rval, Spread};
     pub use super::{
-        Attractor, EmissionShape, EnokiPlugin, NoAutoAabb, Particle2dEffect, ParticleEffectHandle,
-        ParticleSpawner,
+        Attractor, EmissionShape, EnokiPlugin, NoAutoAabb, Orbit, Particle2dEffect,
+        ParticleEffectHandle, ParticleSpawner,
     };
 }
 
@@ -221,6 +221,16 @@ impl EmissionShape {
     }
 }
 
+/// cocos2d's "radius mode": instead of flying by velocity, a particle circles its spawn origin on a spiral, its radius running
+/// from `start_radius` to `end_radius` over its life. The start angle comes from the effect's `direction`.
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub struct Orbit {
+    pub start_radius: Spread,
+    pub end_radius: Spread,
+    /// Radians per second added to the angle.
+    pub turn_rate: Spread,
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug, Reflect)]
 pub struct Attractor {
     pub position: Vec2,
@@ -278,6 +288,9 @@ pub struct Particle2dEffect {
     /// between the two, the result clamped to 0..1. Applies with a `color_curve`.
     #[serde(default)]
     pub color_spread: Option<(LinearRgba, LinearRgba)>,
+    /// Spiral motion around the spawn origin (cocos2d radius mode); overrides the particle's position each update.
+    #[serde(default)]
+    pub orbit: Option<Orbit>,
     /// How the particles are blended into the target. Defaults to alpha blending.
     #[serde(default)]
     pub blend: ParticleBlend,
@@ -309,6 +322,7 @@ impl Default for Particle2dEffect {
             tangential_acceleration: None,
             scale_spread: None,
             color_spread: None,
+            orbit: None,
             blend: ParticleBlend::Alpha,
         }
     }

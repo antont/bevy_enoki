@@ -232,6 +232,7 @@ pub struct Particle2dEffect {
     pub tangential_acceleration: Option<Spread>, // value, +- spread
     pub scale_spread: Option<(f32, f32)>,        // per-particle offset of the scale curve at start / end of life
     pub color_spread: Option<(LinearRgba, LinearRgba)>,
+    pub orbit: Option<Orbit>,                    // spiral around the spawn origin (cocos2d radius mode)
     pub blend: ParticleBlend,                    // Alpha (default), Additive or Custom(src, dst)
 }
 ```

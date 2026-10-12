@@ -55,11 +55,13 @@ impl Default for ParticleSpawnerState {
     }
 }
 
-/// Per-particle random offsets drawn at spawn from the effect's `scale_spread` and `color_spread`.
+/// Per-particle values drawn at spawn from the effect's `scale_spread`, `color_spread` and `orbit`.
 #[derive(Clone, Copy, Default, Debug)]
-pub(crate) struct SpawnOffsets {
+pub(crate) struct SpawnExtras {
     scale: (f32, f32),
     color: ([f32; 4], [f32; 4]),
+    /// Angle, radius, radius change per second, turn rate (radians per second) of an orbiting particle.
+    orbit: [f32; 4],
 }
 
 /// Component for storing particle data
@@ -99,6 +101,10 @@ pub struct ParticleStore {
     pub(crate) scale_offset_end: Vec<f32>,
     pub(crate) color_offset_start: Vec<[f32; 4]>,
     pub(crate) color_offset_end: Vec<[f32; 4]>,
+    pub(crate) orbit_angle: Vec<f32>,
+    pub(crate) orbit_radius: Vec<f32>,
+    pub(crate) orbit_delta_radius: Vec<f32>,
+    pub(crate) orbit_turn_rate: Vec<f32>,
 }
 
 impl ParticleStore {
@@ -151,6 +157,10 @@ impl ParticleStore {
             scale_offset_end,
             color_offset_start,
             color_offset_end,
+            orbit_angle,
+            orbit_radius,
+            orbit_delta_radius,
+            orbit_turn_rate,
         );
     }
 
@@ -171,7 +181,7 @@ impl ParticleStore {
         origin: Vec2,
         radial_acceleration: f32,
         tangential_acceleration: f32,
-        offsets: SpawnOffsets,
+        offsets: SpawnExtras,
     ) {
         self.position_x.push(transform.translation.x);
         self.position_y.push(transform.translation.y);
@@ -208,6 +218,10 @@ impl ParticleStore {
         self.scale_offset_end.push(offsets.scale.1);
         self.color_offset_start.push(offsets.color.0);
         self.color_offset_end.push(offsets.color.1);
+        self.orbit_angle.push(offsets.orbit[0]);
+        self.orbit_radius.push(offsets.orbit[1]);
+        self.orbit_delta_radius.push(offsets.orbit[2]);
+        self.orbit_turn_rate.push(offsets.orbit[3]);
     }
 
     fn swap_remove(&mut self, index: usize) {
@@ -251,6 +265,10 @@ impl ParticleStore {
             scale_offset_end,
             color_offset_start,
             color_offset_end,
+            orbit_angle,
+            orbit_radius,
+            orbit_delta_radius,
+            orbit_turn_rate,
         );
     }
 
@@ -439,6 +457,7 @@ fn create_particle(store: &mut ParticleStore, effect: &Particle2dEffect, transfo
         .map(|a| a.rand())
         .unwrap_or_default();
 
+    let lifetime = effect.lifetime.rand();
     let spread4 = |spread: &LinearRgba| {
         let r = || rand::random::<f32>() * 2. - 1.;
         [
@@ -448,7 +467,7 @@ fn create_particle(store: &mut ParticleStore, effect: &Particle2dEffect, transfo
             spread.alpha * r(),
         ]
     };
-    let offsets = SpawnOffsets {
+    let offsets = SpawnExtras {
         scale: effect
             .scale_spread
             .map(|(start, end)| {
@@ -462,6 +481,16 @@ fn create_particle(store: &mut ParticleStore, effect: &Particle2dEffect, transfo
             .color_spread
             .map(|(start, end)| (spread4(&start), spread4(&end)))
             .unwrap_or_default(),
+        orbit: effect.orbit.as_ref().map_or([0.0; 4], |orbit| {
+            // cocos2d radius mode `initParticle`: the radius runs from start to end over the particle's life.
+            let (start, end) = (orbit.start_radius.rand(), orbit.end_radius.rand());
+            [
+                direction.y.atan2(direction.x),
+                start,
+                (end - start) / lifetime.max(f32::EPSILON),
+                orbit.turn_rate.rand(),
+            ]
+        }),
     };
 
     let origin = transform.translation.truncate();
@@ -486,7 +515,7 @@ fn create_particle(store: &mut ParticleStore, effect: &Particle2dEffect, transfo
 
     store.push(
         transform,
-        effect.lifetime.rand(),
+        lifetime,
         (direction * speed).extend(0.),
         angular,
         effect.color.unwrap_or(LinearRgba::WHITE),
@@ -614,6 +643,17 @@ fn update_particles_simd(
             spawner_world_pos,
             position_delta,
         );
+    }
+
+    if effect.orbit.is_some() {
+        // cocos2d radius mode `update:`: the particle sits on a spiral around its spawn origin.
+        for index in 0..particles.len() {
+            particles.orbit_angle[index] += particles.orbit_turn_rate[index] * delta;
+            particles.orbit_radius[index] += particles.orbit_delta_radius[index] * delta;
+            let (sin, cos) = particles.orbit_angle[index].sin_cos();
+            particles.position_x[index] = particles.origin_x[index] - cos * particles.orbit_radius[index];
+            particles.position_y[index] = particles.origin_y[index] - sin * particles.orbit_radius[index];
+        }
     }
 
     if let Some(scale_curve) = effect.scale_curve.as_ref() {
@@ -767,7 +807,7 @@ pub(crate) fn calculate_particle_bounds(
 mod tests {
     use super::*;
     use crate::curve::MultiCurve;
-    use crate::values::Spread;
+    use crate::values::{Rval, Spread};
     use std::{
         hint::black_box,
         time::{Duration, Instant},
@@ -791,7 +831,7 @@ mod tests {
                 Vec2::ZERO,
                 0.0,
                 0.0,
-                SpawnOffsets::default(),
+                SpawnExtras::default(),
             );
         }
         particles
@@ -875,7 +915,7 @@ mod tests {
                 origin,
                 -200.0,
                 90.0,
-                SpawnOffsets::default(),
+                SpawnExtras::default(),
             );
         }
         for _ in 0..steps {
@@ -907,7 +947,7 @@ mod tests {
             Vec2::ZERO,
             500.0,
             500.0,
-            SpawnOffsets::default(),
+            SpawnExtras::default(),
         );
         update_particles(&mut particles, &Particle2dEffect::default(), 0.1, Vec3::ZERO, Vec3::ZERO);
         assert!(particles.position_x[0].is_finite() && particles.position_x[0] == 0.0);
@@ -986,6 +1026,37 @@ mod tests {
         assert!(store.color_g.iter().all(|g| *g == 0.0), "channels without a spread stay put");
     }
 
+    /// cocos2d radius mode `update:`: `angle += dps * dt; radius += deltaRadius * dt; pos = -(cos angle, sin angle) * radius`.
+    #[test]
+    fn orbit_follows_cocos2d_radius_mode() {
+        let origin = Vec2::new(10.0, 20.0);
+        let effect = Particle2dEffect {
+            orbit: Some(crate::Orbit {
+                start_radius: Spread(100.0, 0.0),
+                end_radius: Spread(0.0, 0.0),
+                turn_rate: Spread(1.5, 0.0),
+            }),
+            lifetime: Rval::new(0.4, 0.0),
+            direction: Some(Rval::new(Vec2::new(0.0, 1.0), 0.0)), // start angle 90 degrees
+            linear_speed: None,
+            ..Default::default()
+        };
+        let mut store = ParticleStore::default();
+        create_particle(&mut store, &effect, &Transform::from_translation(origin.extend(0.0)));
+        let (mut angle, mut radius) = (std::f32::consts::FRAC_PI_2, 100.0_f32);
+        let (delta_radius, turn) = (-100.0 / 0.4, 1.5);
+        let dt = 1.0 / 30.0;
+        for _ in 0..6 {
+            update_particles(&mut store, &effect, dt, Vec3::ZERO, Vec3::ZERO);
+            angle += turn * dt;
+            radius += delta_radius * dt;
+            let expected = origin - Vec2::new(angle.cos(), angle.sin()) * radius;
+            let actual = Vec2::new(store.position_x[0], store.position_y[0]);
+            assert!(actual.distance(expected) < 1e-3, "{actual} != {expected}");
+        }
+        assert!(radius < 100.0 && radius > 0.0);
+    }
+
     #[test]
     fn rect_emission_covers_the_half_extents() {
         let half = Vec2::new(10.0, 4.0);
@@ -1032,7 +1103,7 @@ mod tests {
                 Vec2::ZERO,
                 0.0,
                 0.0,
-                SpawnOffsets::default(),
+                SpawnExtras::default(),
             );
         }
         for _ in 0..steps {
