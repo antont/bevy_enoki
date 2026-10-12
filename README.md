@@ -206,6 +206,7 @@ pub enum EmissionShape {
     #[default]
     Point,
     Circle(f32),
+    Rect(Vec2), // half extents
 }
 
 #[derive(Asset, TypePath, Default, Deserialize, Clone, Debug)]
@@ -227,6 +228,11 @@ pub struct Particle2dEffect {
     pub angular_damp: Option<Rval<f32>>,
     pub scale_curve: Option<MultiCurve<f32>>,
     pub color_curve: Option<MultiCurve<LinearRgba>>,
+    pub radial_acceleration: Option<Spread>,     // value, +- spread; away from the spawn origin
+    pub tangential_acceleration: Option<Spread>, // value, +- spread
+    pub scale_spread: Option<(f32, f32)>,        // per-particle offset of the scale curve at start / end of life
+    pub color_spread: Option<(LinearRgba, LinearRgba)>,
+    pub blend: ParticleBlend,                    // Alpha (default), Additive or Custom(src, dst)
 }
 ```
 

@@ -270,6 +270,14 @@ pub struct Particle2dEffect {
     /// Acceleration perpendicular to the radial direction (counter-clockwise when positive), in units/s².
     #[serde(default)]
     pub tangential_acceleration: Option<Spread>,
+    /// Per-particle random offset of the scale curve, (spread at the start, spread at the end of life), interpolated between
+    /// the two and floored at 0. Applies with a `scale_curve` (cocos2d's start / finish particle size variance).
+    #[serde(default)]
+    pub scale_spread: Option<(f32, f32)>,
+    /// Per-particle random offset of the colour curve per channel, (spread at the start, spread at the end of life), interpolated
+    /// between the two, the result clamped to 0..1. Applies with a `color_curve`.
+    #[serde(default)]
+    pub color_spread: Option<(LinearRgba, LinearRgba)>,
     /// How the particles are blended into the target. Defaults to alpha blending.
     #[serde(default)]
     pub blend: ParticleBlend,
@@ -299,6 +307,8 @@ impl Default for Particle2dEffect {
             relative_positioning: None,
             radial_acceleration: None,
             tangential_acceleration: None,
+            scale_spread: None,
+            color_spread: None,
             blend: ParticleBlend::Alpha,
         }
     }

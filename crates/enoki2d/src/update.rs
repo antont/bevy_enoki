@@ -55,6 +55,13 @@ impl Default for ParticleSpawnerState {
     }
 }
 
+/// Per-particle random offsets drawn at spawn from the effect's `scale_spread` and `color_spread`.
+#[derive(Clone, Copy, Default, Debug)]
+pub(crate) struct SpawnOffsets {
+    scale: (f32, f32),
+    color: ([f32; 4], [f32; 4]),
+}
+
 /// Component for storing particle data
 #[derive(Component, Default, Clone, Reflect)]
 pub struct ParticleStore {
@@ -88,6 +95,10 @@ pub struct ParticleStore {
     pub(crate) origin_y: Vec<f32>,
     pub(crate) radial_acceleration: Vec<f32>,
     pub(crate) tangential_acceleration: Vec<f32>,
+    pub(crate) scale_offset_start: Vec<f32>,
+    pub(crate) scale_offset_end: Vec<f32>,
+    pub(crate) color_offset_start: Vec<[f32; 4]>,
+    pub(crate) color_offset_end: Vec<[f32; 4]>,
 }
 
 impl ParticleStore {
@@ -136,6 +147,10 @@ impl ParticleStore {
             origin_y,
             radial_acceleration,
             tangential_acceleration,
+            scale_offset_start,
+            scale_offset_end,
+            color_offset_start,
+            color_offset_end,
         );
     }
 
@@ -156,6 +171,7 @@ impl ParticleStore {
         origin: Vec2,
         radial_acceleration: f32,
         tangential_acceleration: f32,
+        offsets: SpawnOffsets,
     ) {
         self.position_x.push(transform.translation.x);
         self.position_y.push(transform.translation.y);
@@ -188,6 +204,10 @@ impl ParticleStore {
         self.origin_y.push(origin.y);
         self.radial_acceleration.push(radial_acceleration);
         self.tangential_acceleration.push(tangential_acceleration);
+        self.scale_offset_start.push(offsets.scale.0);
+        self.scale_offset_end.push(offsets.scale.1);
+        self.color_offset_start.push(offsets.color.0);
+        self.color_offset_end.push(offsets.color.1);
     }
 
     fn swap_remove(&mut self, index: usize) {
@@ -227,6 +247,10 @@ impl ParticleStore {
             origin_y,
             radial_acceleration,
             tangential_acceleration,
+            scale_offset_start,
+            scale_offset_end,
+            color_offset_start,
+            color_offset_end,
         );
     }
 
@@ -415,6 +439,31 @@ fn create_particle(store: &mut ParticleStore, effect: &Particle2dEffect, transfo
         .map(|a| a.rand())
         .unwrap_or_default();
 
+    let spread4 = |spread: &LinearRgba| {
+        let r = || rand::random::<f32>() * 2. - 1.;
+        [
+            spread.red * r(),
+            spread.green * r(),
+            spread.blue * r(),
+            spread.alpha * r(),
+        ]
+    };
+    let offsets = SpawnOffsets {
+        scale: effect
+            .scale_spread
+            .map(|(start, end)| {
+                (
+                    start * (rand::random::<f32>() * 2. - 1.),
+                    end * (rand::random::<f32>() * 2. - 1.),
+                )
+            })
+            .unwrap_or_default(),
+        color: effect
+            .color_spread
+            .map(|(start, end)| (spread4(&start), spread4(&end)))
+            .unwrap_or_default(),
+    };
+
     let origin = transform.translation.truncate();
     let mut transform = *transform;
     transform.scale = Vec3::splat(scale);
@@ -450,6 +499,7 @@ fn create_particle(store: &mut ParticleStore, effect: &Particle2dEffect, transfo
         origin,
         radial_acceleration,
         tangential_acceleration,
+        offsets,
     );
 }
 
@@ -568,7 +618,16 @@ fn update_particles_simd(
 
     if let Some(scale_curve) = effect.scale_curve.as_ref() {
         for index in 0..particles.len() {
-            let scale = scale_curve.lerp(particles.duration_fraction[index]);
+            let progress = particles.duration_fraction[index];
+            let mut scale = scale_curve.lerp(progress);
+            if effect.scale_spread.is_some() {
+                // cocos2d: start and end size each get their own spread; the size runs linearly between them, never below 0.
+                let t = progress.min(1.0);
+                scale = (scale
+                    + particles.scale_offset_start[index] * (1.0 - t)
+                    + particles.scale_offset_end[index] * t)
+                    .max(0.0);
+            }
             particles.scale_x[index] = scale;
             particles.scale_y[index] = scale;
             particles.scale_z[index] = scale;
@@ -577,7 +636,25 @@ fn update_particles_simd(
 
     if let Some(color_curve) = effect.color_curve.as_ref() {
         for index in 0..particles.len() {
-            let color = color_curve.lerp(particles.duration_fraction[index]);
+            let progress = particles.duration_fraction[index];
+            let mut color = color_curve.lerp(progress);
+            if effect.color_spread.is_some() {
+                // cocos2d: start and end colour each get their own spread; the colour runs linearly between them, within 0..1.
+                let t = progress.min(1.0);
+                let (start, end) = (
+                    particles.color_offset_start[index],
+                    particles.color_offset_end[index],
+                );
+                let mix = |channel: usize, base: f32| {
+                    (base + start[channel] * (1.0 - t) + end[channel] * t).clamp(0.0, 1.0)
+                };
+                color = LinearRgba::new(
+                    mix(0, color.red),
+                    mix(1, color.green),
+                    mix(2, color.blue),
+                    mix(3, color.alpha),
+                );
+            }
             particles.color_r[index] = color.red;
             particles.color_g[index] = color.green;
             particles.color_b[index] = color.blue;
@@ -689,6 +766,7 @@ pub(crate) fn calculate_particle_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::curve::MultiCurve;
     use crate::values::Spread;
     use std::{
         hint::black_box,
@@ -713,6 +791,7 @@ mod tests {
                 Vec2::ZERO,
                 0.0,
                 0.0,
+                SpawnOffsets::default(),
             );
         }
         particles
@@ -796,6 +875,7 @@ mod tests {
                 origin,
                 -200.0,
                 90.0,
+                SpawnOffsets::default(),
             );
         }
         for _ in 0..steps {
@@ -827,6 +907,7 @@ mod tests {
             Vec2::ZERO,
             500.0,
             500.0,
+            SpawnOffsets::default(),
         );
         update_particles(&mut particles, &Particle2dEffect::default(), 0.1, Vec3::ZERO, Vec3::ZERO);
         assert!(particles.position_x[0].is_finite() && particles.position_x[0] == 0.0);
@@ -849,6 +930,60 @@ mod tests {
         assert!(store.radial_acceleration.iter().all(|a| a.abs() <= 5.0));
         assert!(store.radial_acceleration.iter().any(|a| *a > 1.0) && store.radial_acceleration.iter().any(|a| *a < -1.0));
         assert!(store.tangential_acceleration.iter().all(|a| *a == 10.0));
+    }
+
+    /// cocos2d `initParticle`: `size = start + startVar * r1`, `end = end + endVar * r2`, linear between, never below 0.
+    #[test]
+    fn scale_spread_gives_each_particle_its_own_start_and_end() {
+        let effect = Particle2dEffect {
+            scale_curve: Some(MultiCurve::new().with_point(40.0, 0.0, None).with_point(0.0, 1.0, None)),
+            scale_spread: Some((30.0, 20.0)),
+            ..Default::default()
+        };
+        let mut store = ParticleStore::default();
+        for _ in 0..400 {
+            create_particle(&mut store, &effect, &Transform::default());
+        }
+        let starts: Vec<f32> = store.scale_offset_start.iter().map(|o| 40.0 + o).collect();
+        assert!(starts.iter().all(|s| (10.0..=70.0).contains(s)));
+        assert!(starts.iter().any(|s| *s < 20.0) && starts.iter().any(|s| *s > 60.0));
+
+        // At the start of life a particle is `40 + offset`, at the end `0 + end offset` floored at 0.
+        update_particles(&mut store, &effect, 0.0, Vec3::ZERO, Vec3::ZERO);
+        for i in 0..store.len() {
+            assert!((store.scale_x[i] - (40.0 + store.scale_offset_start[i]).max(0.0)).abs() < 1e-3);
+        }
+        for fraction in store.duration_fraction.iter_mut() {
+            *fraction = 1.0;
+        }
+        update_particles(&mut store, &effect, 0.0, Vec3::ZERO, Vec3::ZERO);
+        for i in 0..store.len() {
+            assert!((store.scale_x[i] - store.scale_offset_end[i].max(0.0)).abs() < 1e-3);
+            assert!(store.scale_x[i] >= 0.0);
+        }
+        assert!(store.scale_x.iter().any(|s| *s == 0.0), "negative end sizes are floored at 0");
+    }
+
+    #[test]
+    fn color_spread_varies_per_particle_and_stays_in_range() {
+        let curve = MultiCurve::new()
+            .with_point(LinearRgba::new(0.9, 0.0, 0.0, 1.0), 0.0, None)
+            .with_point(LinearRgba::new(0.0, 0.0, 0.0, 1.0), 1.0, None);
+        let spread = LinearRgba::new(0.4, 0.0, 0.0, 0.0);
+        let effect = Particle2dEffect {
+            color_curve: Some(curve),
+            color_spread: Some((spread, spread)),
+            ..Default::default()
+        };
+        let mut store = ParticleStore::default();
+        for _ in 0..200 {
+            create_particle(&mut store, &effect, &Transform::default());
+        }
+        update_particles(&mut store, &effect, 0.0, Vec3::ZERO, Vec3::ZERO);
+        assert!(store.color_r.iter().all(|r| (0.0..=1.0).contains(r)));
+        let (min, max) = store.color_r.iter().fold((1.0_f32, 0.0_f32), |(lo, hi), r| (lo.min(*r), hi.max(*r)));
+        assert!(max - min > 0.3, "red varies per particle: {min}..{max}");
+        assert!(store.color_g.iter().all(|g| *g == 0.0), "channels without a spread stay put");
     }
 
     #[test]
@@ -897,6 +1032,7 @@ mod tests {
                 Vec2::ZERO,
                 0.0,
                 0.0,
+                SpawnOffsets::default(),
             );
         }
         for _ in 0..steps {
