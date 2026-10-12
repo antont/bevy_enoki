@@ -207,6 +207,15 @@ pub enum EmissionShape {
     #[default]
     Point,
     Circle(f32),
+    /// Axis-aligned rectangle around the spawner, given as half extents.
+    Rect(Vec2),
+}
+
+impl EmissionShape {
+    /// Offset inside a rectangle of half extents `half` for `u`, `v` uniform in `0..1`.
+    pub(crate) fn rect_offset(half: Vec2, u: f32, v: f32) -> Vec2 {
+        Vec2::new(u * 2. - 1., v * 2. - 1.) * half
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Reflect)]
