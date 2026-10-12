@@ -62,6 +62,8 @@ pub(crate) struct SpawnExtras {
     color: ([f32; 4], [f32; 4]),
     /// Angle, radius, radius change per second, turn rate (radians per second) of an orbiting particle.
     orbit: [f32; 4],
+    /// Rotation at the start and at the end of life.
+    rotation: (f32, f32),
 }
 
 /// Component for storing particle data
@@ -105,6 +107,8 @@ pub struct ParticleStore {
     pub(crate) orbit_radius: Vec<f32>,
     pub(crate) orbit_delta_radius: Vec<f32>,
     pub(crate) orbit_turn_rate: Vec<f32>,
+    pub(crate) rotation_start: Vec<f32>,
+    pub(crate) rotation_end: Vec<f32>,
 }
 
 impl ParticleStore {
@@ -161,6 +165,8 @@ impl ParticleStore {
             orbit_radius,
             orbit_delta_radius,
             orbit_turn_rate,
+            rotation_start,
+            rotation_end,
         );
     }
 
@@ -222,6 +228,8 @@ impl ParticleStore {
         self.orbit_radius.push(offsets.orbit[1]);
         self.orbit_delta_radius.push(offsets.orbit[2]);
         self.orbit_turn_rate.push(offsets.orbit[3]);
+        self.rotation_start.push(offsets.rotation.0);
+        self.rotation_end.push(offsets.rotation.1);
     }
 
     fn swap_remove(&mut self, index: usize) {
@@ -269,6 +277,8 @@ impl ParticleStore {
             orbit_radius,
             orbit_delta_radius,
             orbit_turn_rate,
+            rotation_start,
+            rotation_end,
         );
     }
 
@@ -481,6 +491,10 @@ fn create_particle(store: &mut ParticleStore, effect: &Particle2dEffect, transfo
             .color_spread
             .map(|(start, end)| (spread4(&start), spread4(&end)))
             .unwrap_or_default(),
+        rotation: effect
+            .rotation_over_life
+            .map(|(start, end)| (start.rand(), end.rand()))
+            .unwrap_or_default(),
         orbit: effect.orbit.as_ref().map_or([0.0; 4], |orbit| {
             // cocos2d radius mode `initParticle`: the radius runs from start to end over the particle's life.
             let (start, end) = (orbit.start_radius.rand(), orbit.end_radius.rand());
@@ -653,6 +667,15 @@ fn update_particles_simd(
             let (sin, cos) = particles.orbit_angle[index].sin_cos();
             particles.position_x[index] = particles.origin_x[index] - cos * particles.orbit_radius[index];
             particles.position_y[index] = particles.origin_y[index] - sin * particles.orbit_radius[index];
+        }
+    }
+
+    if effect.rotation_over_life.is_some() {
+        // cocos2d: the rotation runs linearly from its start to its end value over the particle's life.
+        for index in 0..particles.len() {
+            let t = particles.duration_fraction[index].min(1.0);
+            particles.rotation[index] = particles.rotation_start[index]
+                + (particles.rotation_end[index] - particles.rotation_start[index]) * t;
         }
     }
 
@@ -1055,6 +1078,29 @@ mod tests {
             assert!(actual.distance(expected) < 1e-3, "{actual} != {expected}");
         }
         assert!(radius < 100.0 && radius > 0.0);
+    }
+
+    #[test]
+    fn rotation_over_life_runs_from_a_random_start_to_a_random_end() {
+        let effect = Particle2dEffect {
+            rotation_over_life: Some((Spread(1.0, 0.5), Spread(-2.0, 0.0))),
+            ..Default::default()
+        };
+        let mut store = ParticleStore::default();
+        for _ in 0..200 {
+            create_particle(&mut store, &effect, &Transform::default());
+        }
+        assert!(store.rotation_start.iter().all(|r| (0.5..=1.5).contains(r)));
+        assert!(store.rotation_start.iter().any(|r| *r < 0.8) && store.rotation_start.iter().any(|r| *r > 1.2));
+        update_particles(&mut store, &effect, 0.0, Vec3::ZERO, Vec3::ZERO);
+        for i in 0..store.len() {
+            assert_eq!(store.rotation[i], store.rotation_start[i]);
+        }
+        store.duration_fraction.iter_mut().for_each(|f| *f = 0.5);
+        update_particles(&mut store, &effect, 0.0, Vec3::ZERO, Vec3::ZERO);
+        for i in 0..store.len() {
+            assert!((store.rotation[i] - (store.rotation_start[i] - 2.0) / 2.0).abs() < 1e-4);
+        }
     }
 
     #[test]

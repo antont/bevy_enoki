@@ -233,6 +233,7 @@ pub struct Particle2dEffect {
     pub scale_spread: Option<(f32, f32)>,        // per-particle offset of the scale curve at start / end of life
     pub color_spread: Option<(LinearRgba, LinearRgba)>,
     pub orbit: Option<Orbit>,                    // spiral around the spawn origin (cocos2d radius mode)
+    pub rotation_over_life: Option<(Spread, Spread)>, // radians at start / end of life, linear in between
     pub blend: ParticleBlend,                    // Alpha (default), Additive or Custom(src, dst)
 }
 ```

@@ -291,6 +291,10 @@ pub struct Particle2dEffect {
     /// Spiral motion around the spawn origin (cocos2d radius mode); overrides the particle's position each update.
     #[serde(default)]
     pub orbit: Option<Orbit>,
+    /// Rotation in radians at the start and at the end of a particle's life (each `value +- spread`); it runs linearly between
+    /// the two and replaces the spin of `angular_speed` (cocos2d's rotationStart / rotationEnd with variances).
+    #[serde(default)]
+    pub rotation_over_life: Option<(Spread, Spread)>,
     /// How the particles are blended into the target. Defaults to alpha blending.
     #[serde(default)]
     pub blend: ParticleBlend,
@@ -323,6 +327,7 @@ impl Default for Particle2dEffect {
             scale_spread: None,
             color_spread: None,
             orbit: None,
+            rotation_over_life: None,
             blend: ParticleBlend::Alpha,
         }
     }
