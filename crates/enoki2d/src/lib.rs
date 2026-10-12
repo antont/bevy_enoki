@@ -27,7 +27,7 @@ use bevy_transform::components::Transform;
 use color::ColorParticle2dMaterial;
 use serde::{Deserialize, Serialize};
 use blend::ParticleBlend;
-use values::Rval;
+use values::{Rval, Spread};
 
 mod blend;
 mod color;
@@ -47,7 +47,7 @@ pub mod prelude {
     pub use super::material::{Particle2dMaterial, Particle2dMaterialPlugin};
     pub use super::sprite::SpriteParticle2dMaterial;
     pub use super::update::{OneShot, ParticleEffectInstance, ParticleSpawnerState, ParticleStore};
-    pub use super::values::{Random, Rval};
+    pub use super::values::{Random, Rval, Spread};
     pub use super::{
         Attractor, EmissionShape, EnokiPlugin, NoAutoAabb, Particle2dEffect, ParticleEffectHandle,
         ParticleSpawner,
@@ -263,6 +263,13 @@ pub struct Particle2dEffect {
     pub color_curve: Option<curve::MultiCurve<LinearRgba>>,
     pub attractors: Option<Vec<Attractor>>,
     pub relative_positioning: Option<bool>,
+    /// Acceleration along the line from the particle's spawn origin to the particle (away from it when positive), in units/s².
+    /// Per particle: `value +- spread`. Applied to the velocity each update, like gravity.
+    #[serde(default)]
+    pub radial_acceleration: Option<Spread>,
+    /// Acceleration perpendicular to the radial direction (counter-clockwise when positive), in units/s².
+    #[serde(default)]
+    pub tangential_acceleration: Option<Spread>,
     /// How the particles are blended into the target. Defaults to alpha blending.
     #[serde(default)]
     pub blend: ParticleBlend,
@@ -290,6 +297,8 @@ impl Default for Particle2dEffect {
             color_curve: None,
             attractors: None,
             relative_positioning: None,
+            radial_acceleration: None,
+            tangential_acceleration: None,
             blend: ParticleBlend::Alpha,
         }
     }

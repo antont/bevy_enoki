@@ -308,6 +308,22 @@ pub(crate) fn config_gui(
     });
 
     ui.separator();
+    collapsing_header("Radial / tangential acceleration").show(ui, |ui| {
+        for (label, field) in [
+            ("Radial", &mut effect.radial_acceleration),
+            ("Tangential", &mut effect.tangential_acceleration),
+        ] {
+            let mut spread = field.unwrap_or_default();
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.add(egui::DragValue::new(&mut spread.0).prefix("value "));
+                ui.add(egui::DragValue::new(&mut spread.1).prefix("+- "));
+            });
+            *field = (spread != Spread::default()).then_some(spread);
+        }
+    });
+
+    ui.separator();
     collapsing_header("Attractors").show(ui, |ui| {
         let mut should_clear_attractors = false;
 

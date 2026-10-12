@@ -84,6 +84,10 @@ pub struct ParticleStore {
     pub(crate) gravity_x: Vec<f32>,
     pub(crate) gravity_y: Vec<f32>,
     pub(crate) gravity_z: Vec<f32>,
+    pub(crate) origin_x: Vec<f32>,
+    pub(crate) origin_y: Vec<f32>,
+    pub(crate) radial_acceleration: Vec<f32>,
+    pub(crate) tangential_acceleration: Vec<f32>,
 }
 
 impl ParticleStore {
@@ -128,6 +132,10 @@ impl ParticleStore {
             gravity_x,
             gravity_y,
             gravity_z,
+            origin_x,
+            origin_y,
+            radial_acceleration,
+            tangential_acceleration,
         );
     }
 
@@ -145,6 +153,9 @@ impl ParticleStore {
         angular_damp: f32,
         gravity_speed: f32,
         gravity_direction: Vec3,
+        origin: Vec2,
+        radial_acceleration: f32,
+        tangential_acceleration: f32,
     ) {
         self.position_x.push(transform.translation.x);
         self.position_y.push(transform.translation.y);
@@ -173,6 +184,10 @@ impl ParticleStore {
         self.gravity_x.push(gravity_direction.x);
         self.gravity_y.push(gravity_direction.y);
         self.gravity_z.push(gravity_direction.z);
+        self.origin_x.push(origin.x);
+        self.origin_y.push(origin.y);
+        self.radial_acceleration.push(radial_acceleration);
+        self.tangential_acceleration.push(tangential_acceleration);
     }
 
     fn swap_remove(&mut self, index: usize) {
@@ -208,6 +223,10 @@ impl ParticleStore {
             gravity_x,
             gravity_y,
             gravity_z,
+            origin_x,
+            origin_y,
+            radial_acceleration,
+            tangential_acceleration,
         );
     }
 
@@ -384,6 +403,19 @@ fn create_particle(store: &mut ParticleStore, effect: &Particle2dEffect, transfo
         .map(|a| a.rand())
         .unwrap_or_default();
 
+    let radial_acceleration = effect
+        .radial_acceleration
+        .as_ref()
+        .map(|a| a.rand())
+        .unwrap_or_default();
+
+    let tangential_acceleration = effect
+        .tangential_acceleration
+        .as_ref()
+        .map(|a| a.rand())
+        .unwrap_or_default();
+
+    let origin = transform.translation.truncate();
     let mut transform = *transform;
     transform.scale = Vec3::splat(scale);
 
@@ -415,6 +447,9 @@ fn create_particle(store: &mut ParticleStore, effect: &Particle2dEffect, transfo
         angular_damp,
         gravity_speed,
         gravity_direction,
+        origin,
+        radial_acceleration,
+        tangential_acceleration,
     );
 }
 
@@ -483,6 +518,20 @@ fn update_particles_simd(
             }
         }
 
+        // Radial and tangential acceleration, relative to the spawn origin (cocos2d: `pos` is relative to it).
+        let ox = load8(&particles.origin_x, index) + f32x8::splat(position_delta.x);
+        let oy = load8(&particles.origin_y, index) + f32x8::splat(position_delta.y);
+        let rx = px - ox;
+        let ry = py - oy;
+        let radial_len_squared = rx * rx + ry * ry;
+        let has_radial = radial_len_squared.simd_gt(zero);
+        let inverse_len = has_radial.select(one / radial_len_squared.sqrt(), zero);
+        let (radial_x, radial_y) = (rx * inverse_len, ry * inverse_len);
+        let radial_acceleration = load8(&particles.radial_acceleration, index);
+        let tangential_acceleration = load8(&particles.tangential_acceleration, index);
+        vx += (radial_x * radial_acceleration - radial_y * tangential_acceleration) * delta8;
+        vy += (radial_y * radial_acceleration + radial_x * tangential_acceleration) * delta8;
+
         // Gravity accelerates the velocity (cocos2d: `dir += gravity * dt`).
         let gravity = load8(&particles.gravity_speed, index) * delta8;
         vx += load8(&particles.gravity_x, index) * gravity;
@@ -493,6 +542,8 @@ fn update_particles_simd(
         pz += vz * delta8;
         let rotation = load8(&particles.rotation, index) + angular_velocity * delta8;
 
+        store8(&mut particles.origin_x, index, ox);
+        store8(&mut particles.origin_y, index, oy);
         store8(&mut particles.position_x, index, px);
         store8(&mut particles.position_y, index, py);
         store8(&mut particles.position_z, index, pz);
@@ -581,6 +632,20 @@ fn update_particle_scalar(
         }
     }
 
+    // Radial and tangential acceleration, relative to the spawn origin (cocos2d: `pos` is relative to it).
+    particles.origin_x[index] += position_delta.x;
+    particles.origin_y[index] += position_delta.y;
+    let radial = Vec2::new(
+        particles.position_x[index] - particles.origin_x[index],
+        particles.position_y[index] - particles.origin_y[index],
+    )
+    .normalize_or_zero();
+    let tangential = Vec2::new(-radial.y, radial.x);
+    let acceleration = radial * particles.radial_acceleration[index]
+        + tangential * particles.tangential_acceleration[index];
+    particles.velocity_x[index] += acceleration.x * delta;
+    particles.velocity_y[index] += acceleration.y * delta;
+
     // Gravity accelerates the velocity (cocos2d: `dir += gravity * dt`).
     let gravity = particles.gravity_speed[index] * delta;
     particles.velocity_x[index] += particles.gravity_x[index] * gravity;
@@ -624,6 +689,7 @@ pub(crate) fn calculate_particle_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::values::Spread;
     use std::{
         hint::black_box,
         time::{Duration, Instant},
@@ -644,6 +710,9 @@ mod tests {
                 0.1,
                 9.81,
                 Vec3::NEG_Y,
+                Vec2::ZERO,
+                0.0,
+                0.0,
             );
         }
         particles
@@ -686,6 +755,100 @@ mod tests {
             position += velocity * dt;
         }
         (velocity, position)
+    }
+
+    /// cocos2d `update:` gravity mode: `radial = normalize(pos); tangential = (-radial.y, radial.x);
+    /// dir += (radial * radialAccel + tangential * tangentialAccel) * dt; pos += dir * dt`, `pos` relative to the emitter.
+    fn cocos_radial_steps(start: Vec2, radial_accel: f32, tangential_accel: f32, dt: f32, steps: usize) -> (Vec2, Vec2) {
+        let (mut pos, mut dir) = (start, Vec2::ZERO);
+        for _ in 0..steps {
+            let radial = pos.normalize_or_zero();
+            let tangential = Vec2::new(-radial.y, radial.x);
+            dir += (radial * radial_accel + tangential * tangential_accel) * dt;
+            pos += dir * dt;
+        }
+        (pos, dir)
+    }
+
+    #[test]
+    fn radial_and_tangential_acceleration_follow_cocos2d() {
+        let origin = Vec2::new(100.0, -20.0);
+        let start = Vec2::new(3.0, 4.0);
+        let (dt, steps) = (1.0 / 30.0, 12);
+        let (expected_pos, expected_dir) = cocos_radial_steps(start, -200.0, 90.0, dt, steps);
+        let effect = Particle2dEffect::default();
+
+        // 9 particles: 8 on the SIMD path, the last on the scalar path.
+        let mut particles = ParticleStore::default();
+        for _ in 0..9 {
+            particles.push(
+                Transform::from_translation((origin + start).extend(0.0)),
+                1000.0,
+                Vec3::ZERO,
+                0.0,
+                LinearRgba::WHITE,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                Vec3::ZERO,
+                origin,
+                -200.0,
+                90.0,
+            );
+        }
+        for _ in 0..steps {
+            update_particles(&mut particles, &effect, dt, Vec3::ZERO, Vec3::ZERO);
+        }
+        for index in [0, 8] {
+            let pos = Vec2::new(particles.position_x[index], particles.position_y[index]) - origin;
+            let dir = Vec2::new(particles.velocity_x[index], particles.velocity_y[index]);
+            assert!(pos.distance(expected_pos) < 1e-2, "{index}: {pos} != {expected_pos}");
+            assert!(dir.distance(expected_dir) < 1e-2, "{index}: {dir} != {expected_dir}");
+        }
+    }
+
+    #[test]
+    fn a_particle_at_its_origin_gets_no_radial_push() {
+        let mut particles = ParticleStore::default();
+        particles.push(
+            Transform::default(),
+            1000.0,
+            Vec3::ZERO,
+            0.0,
+            LinearRgba::WHITE,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            Vec3::ZERO,
+            Vec2::ZERO,
+            500.0,
+            500.0,
+        );
+        update_particles(&mut particles, &Particle2dEffect::default(), 0.1, Vec3::ZERO, Vec3::ZERO);
+        assert!(particles.position_x[0].is_finite() && particles.position_x[0] == 0.0);
+    }
+
+    #[test]
+    fn spawn_records_the_origin_and_draws_the_acceleration_spread() {
+        let effect = Particle2dEffect {
+            radial_acceleration: Some(Spread(0.0, 5.0)),
+            tangential_acceleration: Some(Spread(10.0, 0.0)),
+            emission_shape: EmissionShape::Rect(Vec2::new(8.0, 8.0)),
+            ..Default::default()
+        };
+        let mut store = ParticleStore::default();
+        let at = Transform::from_xyz(50.0, 60.0, 0.0);
+        for _ in 0..100 {
+            create_particle(&mut store, &effect, &at);
+        }
+        assert!(store.origin_x.iter().all(|x| *x == 50.0) && store.origin_y.iter().all(|y| *y == 60.0));
+        assert!(store.radial_acceleration.iter().all(|a| a.abs() <= 5.0));
+        assert!(store.radial_acceleration.iter().any(|a| *a > 1.0) && store.radial_acceleration.iter().any(|a| *a < -1.0));
+        assert!(store.tangential_acceleration.iter().all(|a| *a == 10.0));
     }
 
     #[test]
@@ -731,6 +894,9 @@ mod tests {
                 0.0,
                 -gravity,
                 Vec3::NEG_Y,
+                Vec2::ZERO,
+                0.0,
+                0.0,
             );
         }
         for _ in 0..steps {
