@@ -91,6 +91,7 @@ pub(crate) fn scene_gui(ui: &mut Ui, settings: &mut SceneSettings) {
 enum Shape {
     Point,
     Circle,
+    Rect,
 }
 
 impl From<Shape> for &'static str {
@@ -98,6 +99,7 @@ impl From<Shape> for &'static str {
         match val {
             Shape::Point => "Point",
             Shape::Circle => "Circle",
+            Shape::Rect => "Rect",
         }
     }
 }
@@ -114,8 +116,55 @@ impl From<&EmissionShape> for Shape {
         match value {
             EmissionShape::Point => Self::Point,
             EmissionShape::Circle(_) => Self::Circle,
+            EmissionShape::Rect(_) => Self::Rect,
         }
     }
+}
+
+const BLEND_FACTORS: [BlendFactor; 10] = [
+    BlendFactor::Zero,
+    BlendFactor::One,
+    BlendFactor::Src,
+    BlendFactor::OneMinusSrc,
+    BlendFactor::SrcAlpha,
+    BlendFactor::OneMinusSrcAlpha,
+    BlendFactor::Dst,
+    BlendFactor::OneMinusDst,
+    BlendFactor::DstAlpha,
+    BlendFactor::OneMinusDstAlpha,
+];
+
+fn blend_field(ui: &mut Ui, blend: &mut ParticleBlend) {
+    let name = |blend: &ParticleBlend| match blend {
+        ParticleBlend::Alpha => "Alpha",
+        ParticleBlend::Additive => "Additive",
+        ParticleBlend::Custom(..) => "Custom",
+    };
+    ui.horizontal(|ui| {
+        ui.label("Blend");
+        egui::ComboBox::from_id_salt("blend_mode")
+            .selected_text(name(blend))
+            .show_ui(ui, |ui| {
+                let custom = match blend {
+                    ParticleBlend::Custom(src, dst) => (*src, *dst),
+                    _ => (BlendFactor::SrcAlpha, BlendFactor::One),
+                };
+                ui.selectable_value(blend, ParticleBlend::Alpha, "Alpha");
+                ui.selectable_value(blend, ParticleBlend::Additive, "Additive");
+                ui.selectable_value(blend, ParticleBlend::Custom(custom.0, custom.1), "Custom");
+            });
+        if let ParticleBlend::Custom(src, dst) = blend {
+            for (id, factor) in [("blend_src", src), ("blend_dst", dst)] {
+                egui::ComboBox::from_id_salt(id)
+                    .selected_text(format!("{factor:?}"))
+                    .show_ui(ui, |ui| {
+                        for option in BLEND_FACTORS {
+                            ui.selectable_value(factor, option, format!("{option:?}"));
+                        }
+                    });
+            }
+        }
+    });
 }
 
 fn collapsing_header(text: impl Into<String>) -> egui::CollapsingHeader {
@@ -167,25 +216,34 @@ pub(crate) fn config_gui(
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut shape, Shape::Point, Shape::Point);
                     ui.selectable_value(&mut shape, Shape::Circle, Shape::Circle);
+                    ui.selectable_value(&mut shape, Shape::Rect, Shape::Rect);
                 });
             if before != shape {
                 effect.emission_shape = match shape {
                     Shape::Point => EmissionShape::Point,
                     Shape::Circle => EmissionShape::Circle(15.0),
+                    Shape::Rect => EmissionShape::Rect(Vec2::new(15.0, 15.0)),
                 };
             } else {
-                let mut val = match effect.emission_shape {
-                    EmissionShape::Point => {
-                        return;
+                match effect.emission_shape {
+                    EmissionShape::Point => {}
+                    EmissionShape::Circle(mut val) => {
+                        if ui.add(egui::DragValue::new(&mut val)).changed() {
+                            effect.emission_shape = EmissionShape::Circle(val);
+                        }
                     }
-                    EmissionShape::Circle(val) => val,
-                };
-                if ui.add(egui::DragValue::new(&mut val)).changed() {
-                    effect.emission_shape = EmissionShape::Circle(val);
+                    EmissionShape::Rect(mut half) => {
+                        let x = ui.add(egui::DragValue::new(&mut half.x)).changed();
+                        let y = ui.add(egui::DragValue::new(&mut half.y)).changed();
+                        if x || y {
+                            effect.emission_shape = EmissionShape::Rect(half);
+                        }
+                    }
                 }
             }
         });
         rval_f32_field(ui, "Lifetime", &mut effect.lifetime);
+        blend_field(ui, &mut effect.blend);
     });
     ui.separator();
     collapsing_header("Linear velocity").show(ui, |ui| {

@@ -251,6 +251,13 @@ fn gizmo(
                     Color::LinearRgba(LinearRgba::RED),
                 );
             }
+            EmissionShape::Rect(half) => {
+                gizmos.rect_2d(
+                    transform.translation.xy(),
+                    half * 2.0,
+                    Color::LinearRgba(LinearRgba::RED),
+                );
+            }
         };
     }
 }
