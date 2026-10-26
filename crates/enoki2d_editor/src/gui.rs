@@ -91,6 +91,7 @@ pub(crate) fn scene_gui(ui: &mut Ui, settings: &mut SceneSettings) {
 enum Shape {
     Point,
     Circle,
+    Rect,
 }
 
 impl From<Shape> for &'static str {
@@ -98,6 +99,7 @@ impl From<Shape> for &'static str {
         match val {
             Shape::Point => "Point",
             Shape::Circle => "Circle",
+            Shape::Rect => "Rect",
         }
     }
 }
@@ -114,6 +116,7 @@ impl From<&EmissionShape> for Shape {
         match value {
             EmissionShape::Point => Self::Point,
             EmissionShape::Circle(_) => Self::Circle,
+            EmissionShape::Rect(_) => Self::Rect,
         }
     }
 }
@@ -167,21 +170,29 @@ pub(crate) fn config_gui(
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut shape, Shape::Point, Shape::Point);
                     ui.selectable_value(&mut shape, Shape::Circle, Shape::Circle);
+                    ui.selectable_value(&mut shape, Shape::Rect, Shape::Rect);
                 });
             if before != shape {
                 effect.emission_shape = match shape {
                     Shape::Point => EmissionShape::Point,
                     Shape::Circle => EmissionShape::Circle(15.0),
+                    Shape::Rect => EmissionShape::Rect(Vec2::new(15.0, 15.0)),
                 };
             } else {
-                let mut val = match effect.emission_shape {
-                    EmissionShape::Point => {
-                        return;
+                match effect.emission_shape {
+                    EmissionShape::Point => {}
+                    EmissionShape::Circle(mut val) => {
+                        if ui.add(egui::DragValue::new(&mut val)).changed() {
+                            effect.emission_shape = EmissionShape::Circle(val);
+                        }
                     }
-                    EmissionShape::Circle(val) => val,
-                };
-                if ui.add(egui::DragValue::new(&mut val)).changed() {
-                    effect.emission_shape = EmissionShape::Circle(val);
+                    EmissionShape::Rect(mut half) => {
+                        let x = ui.add(egui::DragValue::new(&mut half.x)).changed();
+                        let y = ui.add(egui::DragValue::new(&mut half.y)).changed();
+                        if x || y {
+                            effect.emission_shape = EmissionShape::Rect(half);
+                        }
+                    }
                 }
             }
         });
